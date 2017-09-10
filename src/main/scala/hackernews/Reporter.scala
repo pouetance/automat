@@ -2,18 +2,35 @@ package hackernews
 
 import akka.NotUsed
 import akka.http.scaladsl.{Http, HttpExt}
+import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.Source
-import hackernews.StoryAggregator.Story
+import hackernews.Aggregator.Story
 
 object Reporter {
-  def instance(http : HttpExt) : Reporter = {
+  def apply(http : HttpExt)(implicit materializer : ActorMaterializer) : Reporter = {
     val api = new API(http)
-    val aggregator = new StoryAggregator(api)
+    val aggregator = new Aggregator(api)
     new Reporter(api, aggregator)
   }
 }
 
-class Reporter(api : API, aggregator : StoryAggregator) {
+/**
+  * A class creating reports related to the hacker news web site.
+  */
+class Reporter(api : API, aggregator : Aggregator) {
+
+  val StoryPaddingLentgh = 140
+  val ContributorPaddingLength = 50
+
+  val ordinal = (v : Int) =>{
+    val sufixes = "th" :: "st" :: "nd" :: "rd" :: List.fill(6)("th")
+    (v % 100) match {
+      case 11 => v + "th"
+      case 12 => v + "th"
+      case 13 => v + "th"
+      case _  => v.toString + sufixes(v % 10)
+    }
+  }
 
   /**
     * A report on the contributions made by a commenter in the context of a given story.
@@ -23,9 +40,12 @@ class Reporter(api : API, aggregator : StoryAggregator) {
     /**
      * A report of the top contributions to a given story.
      */
-    case class StoryReport(text : String, topContributions : List[ContributionReport]){
+    case class StoryReport(text : String, topContributions : List[Option[ContributionReport]]){
       override def toString: String = {
-        s"|Story ${text} | ${topContributions.toList.sortBy(v => v.storyContributions).reverse.take(10).map(v => s"${v.by} ${v.storyContributions} (${v.totalContributions})").mkString("|")}"
+        s"|${(" Story " + text).padTo(StoryPaddingLentgh, " ").mkString} |${topContributions.toList.map{
+          case Some(contributor) => s" ${contributor.by} (${contributor.storyContributions} for story - ${contributor.totalContributions} total)".padTo(ContributorPaddingLength, " ").mkString
+          case None => s" None".padTo(ContributorPaddingLength, " ").mkString
+        }.mkString("|")}"
       }
     }
 
@@ -33,11 +53,24 @@ class Reporter(api : API, aggregator : StoryAggregator) {
     * A report of the top stories and contributions to Hacker News.
     */
     case class TopStoriesReport(stories : List[StoryReport] = List()){
+      assert(stories.size > 0)
+
+      def numberOfContributors : Int = stories(0).topContributions.size
+
       override def toString: String = {
-        s"""
-           |${stories.mkString("\n")}
-         """.stripMargin
+        val headerStory : String  = "| Story".padTo(StoryPaddingLentgh + 2, " ").mkString
+        val headerCommenters : Seq[String] =
+          for (i <- (1 to numberOfContributors)) yield (s" ${ordinal(i)} Top Commenter".padTo(ContributorPaddingLength, " ")).mkString
+        val headersRow = (headerStory :: headerCommenters.toList).mkString("|")
+
+        val separatorsStory = "|" + List.fill(StoryPaddingLentgh + 1)("-").mkString
+        val separatorsCommenter = List.fill(ContributorPaddingLength)("-").mkString
+        val separatorsRow = (separatorsStory :: List.fill(numberOfContributors)(separatorsCommenter)).mkString("|")
+
+        (headersRow :: separatorsRow :: stories).mkString("\n")
       }
+
+
     }
 
   /**
@@ -47,20 +80,26 @@ class Reporter(api : API, aggregator : StoryAggregator) {
     * @param numberOfContributorsPerStory The number of contributors on a given stories that we want stats on.
     * @return The source
     */
-    def topStories(numberOfStories : Int = 3, numberOfContributorsPerStory : Int = 10 ) : Source[TopStoriesReport, NotUsed] = {
+    def topStories(numberOfStories : Int = 30, numberOfContributorsPerStory : Int = 10 ) : Source[TopStoriesReport, NotUsed] = {
+      assert(numberOfStories > 0)
+      assert(numberOfStories <= 30)
+      assert(numberOfContributorsPerStory > 0)
 
       def storyReport(storyDetails : Story, topStoriesContributions : Map[CommenterName, Int], numberOfContributorsToReport : Int) : StoryReport = {
         val topStoryContributors = storyDetails.contributions.toList.sortBy(v => v._2).reverse.take(numberOfContributorsToReport)
 
         val topContributionsInStory =
           for ((by, storyContributions) <- topStoryContributors)
-            yield (ContributionReport(by = by, storyContributions = storyContributions, totalContributions = topStoriesContributions(by)))
-        StoryReport(text = storyDetails.title, topContributionsInStory)
+            yield Some(ContributionReport(by = by, storyContributions = storyContributions, totalContributions = topStoriesContributions(by)))
+
+        val completedtopContributionsInStory = topContributionsInStory.padTo(numberOfContributorsPerStory, None)
+
+        StoryReport(text = storyDetails.title, completedtopContributionsInStory)
       }
 
       api.topStories()
         .mapConcat(topStories => topStories.take(numberOfStories).map(aggregator.aggregate(_)))
-        .flatMapMerge(1,identity)
+        .flatMapConcat(identity)
         .fold((List[Story](), Map[CommenterName, Int]())) ((current,newStory) => {
             val currentStories = current._1
             val currentTopStoriesContributions = current._2

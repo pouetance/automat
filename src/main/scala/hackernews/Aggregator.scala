@@ -2,17 +2,23 @@ package hackernews
 
 import akka.NotUsed
 import akka.stream.scaladsl.Source
-import hackernews.API.StoryItem
+import hackernews.API.{ActiveCommentItem, DeadCommentItem, DeletedCommentItem, StoryItem}
 
-object StoryAggregator{
+object Aggregator{
   case class Story(title : String, id : ItemID, contributions : Map[CommenterName,Int])
 }
 
-import StoryAggregator._
-class StoryAggregator(api : API) {
+import Aggregator._
+
+/**
+  * The aggregator class is in charge of getting all the information for one specific hacker news item.
+  * This is done by calling hacker news api multiple times to get all pieces of data linked to the item.
+  * @param api The hacker news API used to get all the data.
+  */
+class Aggregator(api : API) {
 
   /**
-    * Create a source that aggregate all informations regarding a specific hacker news story.
+    * Create a source that aggregate all information regarding a specific hacker news story.
     *
     * @param id The story id.
     * @return The created source
@@ -26,8 +32,10 @@ class StoryAggregator(api : API) {
       api
         .comment(id)
         .mapConcat[Source[CommenterName, NotUsed]] {
-        case Some(item) => Source.single(item.by) :: item.kids.map(kid => contributorsUnderComment(kid))
-        case None => List()
+        case ActiveCommentItem(by, text, kids) => Source.single(by) :: kids.map(kid => contributorsUnderComment(kid))
+        // we only show children of deleted and dead comments
+        case DeletedCommentItem(kids) => kids.map(kid => contributorsUnderComment(kid))
+        case DeadCommentItem(kids) => kids.map(kid => contributorsUnderComment(kid))
       }
         .flatMapMerge(1, identity)
     }
