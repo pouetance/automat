@@ -42,9 +42,12 @@ class Reporter(api : API, aggregator : Aggregator) {
      */
     case class StoryReport(text : String, topContributions : List[Option[ContributionReport]]){
       override def toString: String = {
-        s"|${(" Story " + text).padTo(StoryPaddingLentgh, " ").mkString} |${topContributions.toList.map{
-          case Some(contributor) => s" ${contributor.by} (${contributor.storyContributions} for story - ${contributor.totalContributions} total)".padTo(ContributorPaddingLength, " ").mkString
-          case None => s" None".padTo(ContributorPaddingLength, " ").mkString
+        s"|${(" Story " + text).padTo(StoryPaddingLentgh, " ").mkString} |${topContributions.toList.map{v =>
+          val string = v match{
+            case Some(contributor) => s" ${contributor.by} (${contributor.storyContributions} for story - ${contributor.totalContributions} total)"
+            case None => s" None"
+          }
+          string.padTo(ContributorPaddingLength, " ").mkString
         }.mkString("|")}"
       }
     }

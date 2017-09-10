@@ -17,6 +17,7 @@ import Aggregator._
   */
 class Aggregator(api : API) {
 
+  val MaxNumberContributors = 100000
   /**
     * Create a source that aggregate all information regarding a specific hacker news story.
     *
@@ -48,7 +49,7 @@ class Aggregator(api : API) {
         .single(story)
         .mapConcat[Source[CommenterName, NotUsed]](item => item.kids.map(kid => contributorsUnderComment(kid)))
         .flatMapMerge(1, identity)
-        .groupBy(10000, identity)
+        .groupBy(MaxNumberContributors, identity)
         .map(_ -> 1)
         .reduce((l, r) => (l._1, l._2 + r._2))
         .mergeSubstreams
